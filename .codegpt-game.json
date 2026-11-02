@@ -1,0 +1,24 @@
+{
+  "name": "NyxoGame",
+  "engine": "unity",
+  "launch": {
+    "cmd": "${UNITY_EXE}",
+    "args": [
+      "-projectPath",
+      "."
+    ]
+  },
+  "log": {
+    "paths": [
+      "${LOCALAPPDATA}/Unity/Editor/Editor.log"
+    ]
+  },
+  "window": "Unity",
+  "sourceRoots": [
+    "Assets"
+  ],
+  "vars": {
+    "UNITY_EXE": "C:\\Program Files\\Unity\\Hub\\Editor\\6000.6.4f1\\Editor\\Unity.exe",
+    "LOCALAPPDATA": "C:\\Users\\Antplay\\AppData\\Local"
+  }
+}
