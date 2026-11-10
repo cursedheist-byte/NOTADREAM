@@ -1,0 +1,55 @@
+name: Build Windows
+
+# Manual only: every run downloads the LFS assets, so avoid triggering it on
+# every push. Run it from the Actions tab or with `gh workflow run`.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Windows Standalone (Mono)
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+
+    steps:
+      - name: Show runner disk before checkout
+        run: df -h /
+
+      - name: Checkout (with LFS assets)
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          fetch-depth: 1
+
+      - name: Show runner disk after checkout
+        run: df -h /
+
+      - name: Cache Library
+        uses: actions/cache@v4
+        with:
+          path: Library
+          key: Library-${{ github.sha }}
+          restore-keys: |
+            Library-
+
+      - name: Build
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+        with:
+          unityVersion: 6000.6.4f1
+          targetPlatform: StandaloneWindows64
+          allowDirtyBuild: true
+
+      - name: Upload build
+        uses: actions/upload-artifact@v4
+        with:
+          name: NyxoGame-Windows
+          path: build/StandaloneWindows64
+          retention-days: 7

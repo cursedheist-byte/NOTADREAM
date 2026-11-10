@@ -72,6 +72,8 @@ public sealed class Scene1OpeningManager : MonoBehaviour
     private bool repeatCameraPoseCaptured;
     private Transform liminalEnvironmentRoot;
     private bool liminalEndingActive;
+    private Scene2EveningManager cachedLiminalScene2Manager;
+    private float nextLiminalScene2ManagerLookupTime;
     private bool liminalDoorDialoguePlayed;
     private Material liminalGroundMaterial;
     private Material liminalDoorMaterial;
@@ -884,7 +886,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
             return false;
 
         StopAllCoroutines();
-        var scene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+        var scene2Manager = ResolveLiminalScene2Manager(forceRefresh: true);
         if (scene2Manager != null)
             scene2Manager.DebugPrepareForLiminalEndingTest();
         sequenceRunning = false;
@@ -1136,15 +1138,19 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         if (!openingAmbienceAlreadyFaded)
             yield return StartCoroutine(FadeOpeningAmbienceForSceneTransition(2.6f));
 
-        // Let Scene2's Awake/Start setup finish using the loaded world player, then unload
-        // the opening scene while the screen is still covered by its fade overlay.
+        // Let Scene2's Awake/Start setup finish using the loaded world player. The opening
+        // scene's fade overlay dies with the scene, so a persistent cover takes over before
+        // the unload and only fades out once Scene 2 has rendered its first frames.
         yield return null;
         yield return null;
         State = OpeningState.SceneComplete;
         sequenceRunning = false;
         var openingScene = gameObject.scene;
         if (openingScene.IsValid() && openingScene.isLoaded)
+        {
+            SceneHandoffCover.Show().RevealWhenHandoffSettles(openingScene);
             UnityEngine.SceneManagement.SceneManager.UnloadSceneAsync(openingScene);
+        }
     }
 
     private IEnumerator FadeOpeningAmbienceForSceneTransition(float duration)
@@ -1285,7 +1291,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         {
             playerCamera.transform.SetParent(null, true);
         }
-        var scene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+        var scene2Manager = ResolveLiminalScene2Manager(forceRefresh: true);
         var bed = scene2Manager != null ? scene2Manager.RepeatCutsceneBedroomBed : null;
         var bedroomDoor = scene2Manager != null ? scene2Manager.RepeatCutsceneBedroomDoor : null;
         var doorwayCenter = scene2Manager != null ? scene2Manager.RepeatCutsceneBedroomDoorwayCenter : Vector3.zero;
@@ -1754,7 +1760,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         yield return new WaitForSecondsRealtime(2.2f);
         ClearSubtitle();
 
-        var scene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+        var scene2Manager = ResolveLiminalScene2Manager();
         if (scene2Manager != null)
             scene2Manager.SetLiminalEndingObjective("Go to the door");
 
@@ -1862,9 +1868,10 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         // Renderer bounds are only trustworthy once the set is active, and the spawn, the rim
         // walls and the sky rotation are all derived from them.
         liminalEnvironmentRoot.gameObject.SetActive(true);
-        Physics.SyncTransforms();
         ComputeLiminalPlacement(environment.transform);
         CreateLiminalBoundary(environment.transform);
+        // Synchronize once after both the environment and boundary colliders have been created.
+        // The caller's immediate ground raycast and player movement then see all final transforms.
         Physics.SyncTransforms();
 
         if (liminalSkyPanorama != null)
@@ -2321,7 +2328,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         var toDoor = playerCamera.transform.position - liminalGateLookPoint;
         toDoor.y = 0f;
         var distance = toDoor.magnitude;
-        var scene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+        var scene2Manager = ResolveLiminalScene2Manager();
 
         if (!liminalDoorDialoguePlayed && distance <= 10f)
         {
@@ -2345,6 +2352,24 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
                 scene2Manager.SetLiminalEndingObjective(string.Empty);
             StartCoroutine(PlayComaEndingSequence());
         }
+    }
+
+    private Scene2EveningManager ResolveLiminalScene2Manager(bool forceRefresh = false)
+    {
+        if (cachedLiminalScene2Manager != null)
+        {
+            var managerScene = cachedLiminalScene2Manager.gameObject.scene;
+            if (!managerScene.IsValid() || !managerScene.isLoaded)
+                cachedLiminalScene2Manager = null;
+        }
+
+        if (forceRefresh || (cachedLiminalScene2Manager == null && Time.unscaledTime >= nextLiminalScene2ManagerLookupTime))
+        {
+            cachedLiminalScene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+            nextLiminalScene2ManagerLookupTime = Time.unscaledTime + 0.5f;
+        }
+
+        return cachedLiminalScene2Manager;
     }
 
     private static bool LiminalInteractPressed()
@@ -2444,7 +2469,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         Cursor.lockState = CursorLockMode.Locked;
         Cursor.visible = false;
 
-        var scene2Manager = FindFirstObjectByType<Scene2EveningManager>(FindObjectsInactive.Include);
+        var scene2Manager = ResolveLiminalScene2Manager(forceRefresh: true);
         var black = CreateComaOverlay("ComaBlackout", Color.black, 431);
         var white = CreateComaOverlay("ComaFlash", Color.white, 432);
 
