@@ -8,7 +8,7 @@ using UnityEngine.SceneManagement;
 // changing anything visible. Lights near the player keep their authored shadows.
 public sealed class LightShadowDistanceCuller : MonoBehaviour
 {
-    private const float ShadowCutoffDistance = 45f;
+    private const float ShadowCutoffDistance = 35f;
     private const float ApplyInterval = 0.5f;
     private const float PostLoadRescanDelay = 0.75f;
 

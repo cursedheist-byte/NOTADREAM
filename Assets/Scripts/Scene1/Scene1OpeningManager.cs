@@ -3,6 +3,8 @@ using TMPro;
 
 using UnityEngine.Video;
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 
 public sealed class Scene1OpeningManager : MonoBehaviour
 {
@@ -274,6 +276,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         {
             ApplyNightFactoryLighting();
             MakeOriginalFredHardToRecognize();
+            ApplyPlayerVisionBlur();
         }
     }
 
@@ -412,6 +415,39 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         }
     }
 
+    // Scene 1 is watched half-consciously, so a strong near-focus depth of field turns the
+    // room into the player's blurred vision. The volume is a child of this scene's manager,
+    // so it is unloaded with the scene instead of bleeding into Scene 2.
+    private void ApplyPlayerVisionBlur()
+    {
+        if (playerCamera == null)
+            return;
+
+        var volumeObject = new GameObject("Scene1 Vision Blur Volume");
+        volumeObject.transform.SetParent(transform, false);
+        var volume = volumeObject.AddComponent<Volume>();
+        volume.isGlobal = true;
+        volume.priority = 100f;
+        var profile = ScriptableObject.CreateInstance<VolumeProfile>();
+        profile.name = "Scene1 Vision Blur (Runtime)";
+        volume.sharedProfile = profile;
+
+        var depthOfField = profile.Add<DepthOfField>(true);
+        depthOfField.mode.value = DepthOfFieldMode.Bokeh;
+        depthOfField.focusDistance.value = 0.8f;
+        depthOfField.aperture.value = 2.2f;
+        depthOfField.focalLength.value = 85f;
+        depthOfField.bladeCount.value = 6;
+        depthOfField.bladeCurvature.value = 1f;
+        depthOfField.bladeRotation.value = 0f;
+        depthOfField.highQualitySampling.value = true;
+
+        var cameraData = playerCamera.GetComponent<UniversalAdditionalCameraData>();
+        if (cameraData == null)
+            cameraData = playerCamera.gameObject.AddComponent<UniversalAdditionalCameraData>();
+        cameraData.renderPostProcessing = true;
+    }
+
     // Night factory look: cool dim ambient, deep blue-black fog, a low industrial sun. The
     // Fred model keeps a separate fill light so his face stays readable against the dark.
     private void ApplyNightFactoryLighting()
@@ -424,10 +460,8 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
 
         // Use the authored dark-blue night sky for the repeat copy (repeat is night-time).
         var nightSky = nightSkyboxMaterial;
-#if UNITY_EDITOR
         if (nightSky == null)
-            nightSky = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>("Assets/Settings/Night_DarkBlueSky.mat");
-#endif
+            nightSky = BuildAssetLoader.Load<Material>("Assets/Settings/Night_DarkBlueSky.mat");
         if (nightSky != null)
         {
             RenderSettings.skybox = nightSky;
@@ -1250,7 +1284,9 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
             }
         }
         ShowSubtitle("MOM: Yeah, it's me. Actually, you are not even my real child. You're adopted. You actually feel like a burden after your father's death.");
-        yield return new WaitForSecondsRealtime(3.5f);
+        // This is the longest line in the confrontation, so it holds for its full reading time
+        // (the usual 3.5 s plus an extra 2.5 s) before the fade to black starts.
+        yield return new WaitForSecondsRealtime(6f);
         yield return StartCoroutine(FadeOutSuspiciousAmbience(0.9f));
         yield return Fade(fadeOverlay, 1f, 1.2f);
         ClearSubtitle();
@@ -1489,9 +1525,12 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
     {
         if (door == null) return null;
 
-#if UNITY_EDITOR
-        var motherAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/MOM/mom.glb");
-        if (motherAsset == null) return null;
+        var motherAsset = BuildAssetLoader.Load<GameObject>("Assets/Characters/MOM/mom.glb");
+        if (motherAsset == null)
+        {
+            Debug.LogWarning("Scene1 could not load the bedroom mother model (Assets/Characters/MOM/mom.glb).", this);
+            return null;
+        }
         var mother = Instantiate(motherAsset);
         mother.name = "BedroomMother";
         UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(mother, door.gameObject.scene);
@@ -1523,9 +1562,6 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         if (facePlayer.sqrMagnitude < 0.001f) facePlayer = towardBedroom;
         mother.transform.rotation = Quaternion.LookRotation(facePlayer.normalized, Vector3.up);
         return mother;
-#else
-        return null;
-#endif
     }
 
     private IEnumerator MotherEntersBedroom(Transform mother, Transform door, Vector3 bedPosition, Vector3 doorwayCenter, Vector3 doorwayNormal)
@@ -1874,6 +1910,11 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         // The caller's immediate ground raycast and player movement then see all final transforms.
         Physics.SyncTransforms();
 
+        int groundColliders = 0;
+        for (int i = 0; i < liminalGroundModelRoots.Count; i++)
+            groundColliders += liminalGroundModelRoots[i].GetComponentsInChildren<MeshCollider>(true).Length;
+        Debug.Log("[Liminal] ground model colliders=" + groundColliders, this);
+
         if (liminalSkyPanorama != null)
         {
             var skyboxShader = Shader.Find("Liminal/SkyBackdrop");
@@ -2215,12 +2256,17 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         // Find the actual imported road/ground surface under the spawn point. The authored
         // environment's mesh colliders are static and all other gameplay maps are far away.
         var rayOrigin = new Vector3(spawn.x, spawn.y + 30f, spawn.z);
+        string groundName = "none";
         if (Physics.Raycast(rayOrigin, Vector3.down, out var groundHit, 100f,
                 Physics.DefaultRaycastLayers, QueryTriggerInteraction.Ignore) &&
             IsLiminalGroundTransform(groundHit.transform))
         {
             spawn.y = groundHit.point.y;
+            groundName = groundHit.collider.name;
         }
+
+        Debug.Log("[Liminal] spawn=" + spawn.x.ToString("0.00") + "," + spawn.y.ToString("0.00")
+            + "," + spawn.z.ToString("0.00") + " ground=" + groundName, this);
 
         var horizontalLook = doorLookPoint - spawn;
         horizontalLook.y = 0f;
@@ -2739,8 +2785,7 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         if (bed == null)
             return null;
 
-#if UNITY_EDITOR
-        var doctorAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(ComaDoctorModelPath);
+        var doctorAsset = BuildAssetLoader.Load<GameObject>(ComaDoctorModelPath);
         if (doctorAsset == null)
         {
             Debug.LogError("Coma ending: the doctor model was not found under Assets/doctor.", this);
@@ -2801,9 +2846,6 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
             skinnedMeshes[i].updateWhenOffscreen = false;
 
         return doctor;
-#else
-        return null;
-#endif
     }
 
     private void PlayComaDoctorIdle(GameObject doctor)
@@ -2818,18 +2860,16 @@ private UnityEngine.AsyncOperation scene2TransitionLoadOperation;
         animator.enabled = true;
 
         AnimationClip idle = null;
-#if UNITY_EDITOR
-        var assets = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(ComaDoctorModelPath);
-        for (int i = 0; i < assets.Length; i++)
+        var clips = BuildAssetLoader.LoadAll<AnimationClip>(ComaDoctorModelPath);
+        for (int i = 0; i < clips.Length; i++)
         {
-            if (assets[i] is AnimationClip clip && clip.length > 0.05f &&
-                !clip.name.StartsWith("__preview__", System.StringComparison.Ordinal))
+            if (clips[i] != null && clips[i].length > 0.05f &&
+                !clips[i].name.StartsWith("__preview__", System.StringComparison.Ordinal))
             {
-                idle = clip;
+                idle = clips[i];
                 break;
             }
         }
-#endif
         if (idle == null)
         {
             Debug.LogWarning("Coma ending: the doctor idle clip was not found; the model stays in its bind pose.", this);
@@ -2938,8 +2978,7 @@ private GameObject SpawnMotherEnteringFromSide(GameObject fred)
             return null;
         }
 
-#if UNITY_EDITOR
-        var motherAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/MOM/mom.glb");
+        var motherAsset = BuildAssetLoader.Load<GameObject>("Assets/Characters/MOM/mom.glb");
         if (motherAsset == null)
         {
             Debug.LogError("Repeat Scene could not load mom.glb.", this);
@@ -2979,9 +3018,6 @@ private GameObject SpawnMotherEnteringFromSide(GameObject fred)
                 mother.transform.position.z);
         }
         return mother;
-#else
-        return null;
-#endif
     }
 
     private IEnumerator MoveMotherIntoView(GameObject mother, GameObject fred)
@@ -3245,10 +3281,8 @@ private GameObject SpawnMotherEnteringFromSide(GameObject fred)
     {
         if (suspiciousAmbienceClip == null)
         {
-#if UNITY_EDITOR
-            suspiciousAmbienceClip = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioClip>(
+            suspiciousAmbienceClip = BuildAssetLoader.Load<AudioClip>(
                 "Assets/Sounds/suspicious ambiance.mp3");
-#endif
         }
 
         if (suspiciousAmbienceClip == null)

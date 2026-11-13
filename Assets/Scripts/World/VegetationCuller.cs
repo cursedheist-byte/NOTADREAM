@@ -17,21 +17,30 @@ public sealed class VegetationCuller : MonoBehaviour
     private const int FrameBudget = 2500;
 
     private static VegetationCuller instance;
+    private static bool suppressed;
     // Rescans run on every additive scene load, and a culled renderer would otherwise
     // report ShadowCastingMode.Off as its authored mode and never cast again.
     private static readonly System.Collections.Generic.Dictionary<Renderer, ShadowCastingMode> authoredShadowModes =
         new System.Collections.Generic.Dictionary<Renderer, ShadowCastingMode>();
+    // Distance culling disables renderers; a rescan must not read that back as "authored off".
+    private static readonly System.Collections.Generic.Dictionary<Renderer, bool> authoredEnabled =
+        new System.Collections.Generic.Dictionary<Renderer, bool>();
 
     private Renderer[] renderers = new Renderer[0];
     private ShadowCastingMode[] baseShadowModes = new ShadowCastingMode[0];
     private Vector3[] centers = new Vector3[0];
     private bool[] managed = new bool[0];
     private bool[] renderShadow = new bool[0];
+    private bool[] renderVisible = new bool[0];
     private int cursor;
     private bool rescanPending;
     private float nextRescanTime;
     private Camera cachedCamera;
     private float nextCameraLookup;
+    private Vector3 cycleOrigin;
+    private bool hasSwept;
+    private bool forceSweep;
+    private GraphicsPreset lastPreset;
 
     [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
     private static void Bootstrap()
@@ -60,8 +69,50 @@ public sealed class VegetationCuller : MonoBehaviour
         instance.cachedCamera = null;
     }
 
+    // NoPropsMode reactivates the root outside a scene load; the cached arrays are empty by
+    // then, so the distance culling has to re-acquire its renderers immediately.
+    public static void NotifyPropsRestored()
+    {
+        suppressed = false;
+        if (instance == null)
+        {
+            return;
+        }
+
+        instance.rescanPending = true;
+        instance.nextRescanTime = Time.unscaledTime;
+        instance.cachedCamera = null;
+        instance.forceSweep = true;
+    }
+
+    // With the whole root deactivated there is nothing left to cull, and sweeping 21k cached
+    // renderers every frame would keep burning main-thread time for no visual result.
+    public static void SetPropsHidden(bool hidden)
+    {
+        suppressed = hidden;
+        if (instance == null || !hidden)
+        {
+            return;
+        }
+
+        instance.renderers = new Renderer[0];
+        instance.baseShadowModes = new ShadowCastingMode[0];
+        instance.centers = new Vector3[0];
+        instance.managed = new bool[0];
+        instance.renderShadow = new bool[0];
+        instance.renderVisible = new bool[0];
+        instance.cursor = 0;
+        instance.rescanPending = false;
+        instance.cachedCamera = null;
+    }
+
     private void Update()
     {
+        if (suppressed)
+        {
+            return;
+        }
+
         if (rescanPending && Time.unscaledTime >= nextRescanTime)
         {
             rescanPending = false;
@@ -80,6 +131,28 @@ public sealed class VegetationCuller : MonoBehaviour
         }
 
         Vector3 cameraPosition = camera.transform.position;
+
+        // A distance sweep can only change what it does when the camera moves, and the sweep
+        // itself costs around 1.5 ms per frame with 21k renderers. Whole cycles are skipped
+        // while the camera is effectively still; leaving that state re-evaluates immediately.
+        if (cursor == 0)
+        {
+            if (lastPreset != GraphicsPresetController.Current)
+            {
+                lastPreset = GraphicsPresetController.Current;
+                forceSweep = true;
+            }
+
+            if (hasSwept && !forceSweep && (cameraPosition - cycleOrigin).sqrMagnitude < 4f)
+            {
+                return;
+            }
+
+            cycleOrigin = cameraPosition;
+            hasSwept = true;
+            forceSweep = false;
+        }
+
         int budget = Mathf.Min(FrameBudget, renderers.Length);
         for (int step = 0; step < budget; step++)
         {
@@ -107,6 +180,16 @@ public sealed class VegetationCuller : MonoBehaviour
             {
                 renderShadow[index] = shouldCast;
                 renderer.shadowCastingMode = shouldCast ? baseShadowModes[index] : ShadowCastingMode.Off;
+            }
+
+            float visibleLimit = GraphicsPresetController.MaxVegetationDistance;
+            bool visible = renderVisible[index];
+            float renderLimit = visible ? visibleLimit + Hysteresis : visibleLimit;
+            bool shouldRender = sqrDistance <= renderLimit * renderLimit;
+            if (shouldRender != visible)
+            {
+                renderVisible[index] = shouldRender;
+                renderer.enabled = shouldRender;
             }
         }
     }
@@ -162,6 +245,7 @@ public sealed class VegetationCuller : MonoBehaviour
             centers = new Vector3[0];
             managed = new bool[0];
             renderShadow = new bool[0];
+            renderVisible = new bool[0];
             cursor = 0;
             return;
         }
@@ -172,6 +256,7 @@ public sealed class VegetationCuller : MonoBehaviour
         var newCenters = new Vector3[found.Length];
         var newManaged = new bool[found.Length];
         var newShadow = new bool[found.Length];
+        var newVisible = new bool[found.Length];
         int write = 0;
         for (int i = 0; i < found.Length; i++)
         {
@@ -188,10 +273,17 @@ public sealed class VegetationCuller : MonoBehaviour
                 authoredShadowModes.Add(renderer, authoredMode);
             }
 
+            if (!authoredEnabled.TryGetValue(renderer, out bool authoredEnabledState))
+            {
+                authoredEnabledState = renderer.enabled;
+                authoredEnabled.Add(renderer, authoredEnabledState);
+            }
+
             newBaseModes[write] = authoredMode;
             newCenters[write] = renderer.bounds.center;
-            newManaged[write] = renderer.enabled;
-            newShadow[write] = renderer.shadowCastingMode != ShadowCastingMode.Off;
+            newManaged[write] = authoredEnabledState;
+            newShadow[write] = authoredMode != ShadowCastingMode.Off;
+            newVisible[write] = renderer.enabled;
             write++;
         }
 
@@ -202,6 +294,7 @@ public sealed class VegetationCuller : MonoBehaviour
             System.Array.Resize(ref newCenters, write);
             System.Array.Resize(ref newManaged, write);
             System.Array.Resize(ref newShadow, write);
+            System.Array.Resize(ref newVisible, write);
         }
 
         renderers = newRenderers;
@@ -209,6 +302,8 @@ public sealed class VegetationCuller : MonoBehaviour
         centers = newCenters;
         managed = newManaged;
         renderShadow = newShadow;
+        renderVisible = newVisible;
         cursor = 0;
+        forceSweep = true;
     }
 }

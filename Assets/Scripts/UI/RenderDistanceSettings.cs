@@ -81,7 +81,7 @@ public sealed class RenderDistanceSettings : MonoBehaviour
 
     private static void ApplyToAllCameras()
     {
-        float distance = Distance;
+        float distance = Mathf.Min(Distance, GraphicsPresetController.MaxRenderDistance);
         int count = Camera.GetAllCameras(cameraBuffer);
         if (count >= cameraBuffer.Length)
         {

@@ -1,7 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.Rendering;
-using UnityEngine.Rendering.Universal;
+using UnityEngine.SceneManagement;
 
 public sealed class PauseSettingsMenu : MonoBehaviour
 {
@@ -13,31 +12,10 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         Controls
     }
 
-    private enum GraphicsPreset
-    {
-        Potato,
-        Low,
-        Medium,
-        High,
-        Max
-    }
-
-    private enum LoadMode
-    {
-        Cpu,
-        Gpu,
-        Mix,
-        OnlyGpu
-    }
-
-    private const string LoadModePrefKey = "Nyxo.LoadMode";
-
     [SerializeField] private SimpleFirstPersonController playerController;
-    [SerializeField] private Volume highQualityVolume;
 
     private MenuPage currentPage;
     private GraphicsPreset graphicsPreset = GraphicsPreset.High;
-    private LoadMode loadMode = LoadMode.Mix;
     private Resolution[] availableResolutions;
     private AudioSource[] soundSources;
     private float[] originalSourceVolumes;
@@ -46,11 +24,13 @@ public sealed class PauseSettingsMenu : MonoBehaviour
 
     private bool fullscreen;
     private bool showFps;
+    private bool noProps;
     private int renderDistanceIndex;
     private float masterVolume = 1f;
     private float sfxVolume = 1f;
     private float previousTimeScale = 1f;
     private bool isOpen;
+    private bool leaveRequested;
     private bool standaloneMenuHost;
     private System.Action mainMenuClosedCallback;
     private string rebindingName;
@@ -71,15 +51,13 @@ public sealed class PauseSettingsMenu : MonoBehaviour
     private Texture2D navSelectedTexture;
     private Texture2D buttonTexture;
     private Texture2D buttonHoverTexture;
-    private Texture2D fireIconTexture;
 
     private void Awake()
     {
         if (playerController == null)
             playerController = GetComponent<SimpleFirstPersonController>();
 
-        if (highQualityVolume == null)
-            highQualityVolume = FindAnyObjectByType<Volume>();
+        graphicsPreset = GraphicsPresetController.Current;
 
         availableResolutions = Screen.resolutions;
         if (availableResolutions == null || availableResolutions.Length == 0)
@@ -88,8 +66,8 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         resolutionIndex = FindCurrentResolution();
         fullscreen = Screen.fullScreen;
         showFps = FpsCounter.StoredValue;
+        noProps = NoPropsMode.StoredValue;
         renderDistanceIndex = RenderDistanceSettings.StoredIndex;
-        loadMode = (LoadMode)Mathf.Clamp(PlayerPrefs.GetInt(LoadModePrefKey, (int)LoadMode.Mix), 0, 3);
         CacheAudioSources();
     }
 
@@ -109,12 +87,19 @@ public sealed class PauseSettingsMenu : MonoBehaviour
             return;
         }
 
-        ApplyGraphicsPreset(GraphicsPreset.High);
+        ApplyGraphicsPreset(graphicsPreset);
         CloseMenu();
     }
 
     private void Update()
     {
+        if (leaveRequested)
+        {
+            leaveRequested = false;
+            SceneManager.LoadScene("MainMenu", LoadSceneMode.Single);
+            return;
+        }
+
         if (isOpen)
         {
             Cursor.lockState = CursorLockMode.None;
@@ -189,6 +174,29 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         Cursor.visible = false;
     }
 
+    // The pause menu freezes time and disables the player, so both have to be restored before
+    // the menu scene loads or the main menu would come up frozen with a dead cursor. The load
+    // itself is deferred to Update because the button is clicked inside OnGUI.
+    private void LeaveGame()
+    {
+        if (standaloneMenuHost)
+        {
+            CloseMenu();
+            return;
+        }
+
+        PlayMenuClick();
+        StopRebinding();
+        isOpen = false;
+        leaveRequested = true;
+        Time.timeScale = 1f;
+        AudioListener.pause = false;
+        if (playerController != null)
+            playerController.enabled = false;
+        Cursor.lockState = CursorLockMode.None;
+        Cursor.visible = true;
+    }
+
     private void OnGUI()
     {
         if (!isOpen)
@@ -226,7 +234,9 @@ public sealed class PauseSettingsMenu : MonoBehaviour
 
         float navX = sidebar.x + 18f;
         float navItemWidth = sidebar.width - 36f;
-        float footerSpace = sidebar.height > 310f ? 82f : 34f;
+        bool roomySidebar = sidebar.height > 370f;
+        bool showLeave = !standaloneMenuHost && roomySidebar;
+        float footerSpace = roomySidebar ? 132f : sidebar.height > 310f ? 82f : 34f;
         float navTop = sidebar.y + 20f;
         float navAvailable = Mathf.Max(150f, sidebar.height - footerSpace - 28f);
         float navSpacing = Mathf.Clamp((navAvailable - 42f) / 3f, 42f, 62f);
@@ -238,9 +248,16 @@ public sealed class PauseSettingsMenu : MonoBehaviour
 
         if (sidebar.height > 310f)
         {
-            Rect resumeRect = new Rect(navX, sidebar.yMax - 82f, navItemWidth, 50f);
+            Rect resumeRect = new Rect(navX, sidebar.yMax - (showLeave ? 132f : 82f), navItemWidth, showLeave ? 46f : 50f);
             if (GUI.Button(resumeRect, standaloneMenuHost ? "BACK TO MENU" : "RESUME GAME", menuButtonStyle))
                 CloseMenu();
+
+            if (showLeave)
+            {
+                Rect leaveRect = new Rect(navX, sidebar.yMax - 80f, navItemWidth, 46f);
+                if (GUI.Button(leaveRect, "LEAVE GAME", menuButtonStyle))
+                    LeaveGame();
+            }
         }
         GUI.Label(new Rect(navX, sidebar.yMax - 30f, navItemWidth, 20f),
             standaloneMenuHost ? "ESC  /  BACK TO MENU" : "ESC  /  BACK TO GAME", footerStyle);
@@ -333,6 +350,15 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         GUILayout.Space(18f);
         if (GUILayout.Button("RESUME GAME", menuButtonStyle, GUILayout.Height(52f)))
             CloseMenu();
+
+        if (!standaloneMenuHost)
+        {
+            GUILayout.Space(8f);
+            if (GUILayout.Button("LEAVE GAME — RETURN TO MAIN MENU", menuButtonStyle, GUILayout.Height(52f)))
+                LeaveGame();
+            GUILayout.Space(6f);
+            GUILayout.Label("Closes this session and takes you back to the main menu immediately.", labelStyle, GUILayout.Height(32f));
+        }
     }
 
     private void DrawControlsPage()
@@ -431,7 +457,6 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         DestroyUiTexture(navSelectedTexture);
         DestroyUiTexture(buttonTexture);
         DestroyUiTexture(buttonHoverTexture);
-        DestroyUiTexture(fireIconTexture);
     }
 
     private void DrawVideoPage()
@@ -445,26 +470,6 @@ public sealed class PauseSettingsMenu : MonoBehaviour
             ApplyGraphicsPreset(graphicsPreset);
         if (GUILayout.Button("▶", menuButtonStyle, GUILayout.Width(70f), GUILayout.Height(42f)))
             SetGraphicsPreset((int)graphicsPreset + 1);
-        GUILayout.EndHorizontal();
-        GUILayout.Space(14f);
-
-        GUILayout.Label("LOAD MODE", sectionStyle, GUILayout.ExpandWidth(true), GUILayout.Height(30f));
-        GUILayout.Label(LoadModeName(loadMode), labelStyle, GUILayout.ExpandWidth(true), GUILayout.Height(28f));
-        GUILayout.Label(LoadModeHint(loadMode), labelStyle, GUILayout.ExpandWidth(true), GUILayout.Height(42f));
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button(LoadModeButton("CPU", LoadMode.Cpu), menuButtonStyle, GUILayout.Height(40f)))
-            SetLoadMode(LoadMode.Cpu);
-        if (GUILayout.Button(LoadModeButton("GPU", LoadMode.Gpu), menuButtonStyle, GUILayout.Height(40f)))
-            SetLoadMode(LoadMode.Gpu);
-        GUILayout.EndHorizontal();
-        GUILayout.BeginHorizontal();
-        if (GUILayout.Button(LoadModeButton("MIX", LoadMode.Mix), menuButtonStyle, GUILayout.Height(40f)))
-            SetLoadMode(LoadMode.Mix);
-        if (GUILayout.Button(
-                new GUIContent(LoadModeButton("ONLY GPU", LoadMode.OnlyGpu), fireIconTexture),
-                menuButtonStyle,
-                GUILayout.Height(40f)))
-            SetLoadMode(LoadMode.OnlyGpu);
         GUILayout.EndHorizontal();
         GUILayout.Space(14f);
 
@@ -493,13 +498,30 @@ public sealed class PauseSettingsMenu : MonoBehaviour
             FpsCounter.SetVisible(showFps);
         }
 
+        GUILayout.Space(8f);
+        bool noPropsNow = GUILayout.Toggle(noProps, "  NO PROPS — low-end mode (hides all trees + grass)", GUILayout.Height(32f));
+        if (noPropsNow != noProps)
+        {
+            noProps = noPropsNow;
+            NoPropsMode.SetActive(noProps);
+        }
+
+        GUILayout.Label(
+            "Removes every tree, fern and grass patch from the map and survives restarts. This is the biggest FPS gain available; switch it off to bring the vegetation back.",
+            labelStyle, GUILayout.Height(46f));
+
         GUILayout.Space(16f);
         GUILayout.Label("RENDER DISTANCE", sectionStyle, GUILayout.ExpandWidth(true), GUILayout.Height(30f));
-        GUILayout.Label("Scenery past this distance is not drawn. Lower it if the game stutters; raise it to see farther.", labelStyle, GUILayout.Height(46f));
+        GUILayout.Label("Scenery past this distance is not drawn. Lower it if the game stutters; raise it to see farther. Low presets cap it.", labelStyle, GUILayout.Height(46f));
         GUILayout.BeginHorizontal();
         if (GUILayout.Button("◀", menuButtonStyle, GUILayout.Width(70f), GUILayout.Height(40f)))
             SetRenderDistanceIndex(renderDistanceIndex - 1);
-        GUILayout.Button(RenderDistanceSettings.Distances[renderDistanceIndex] + " m", menuButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(40f));
+        int chosenDistance = RenderDistanceSettings.Distances[renderDistanceIndex];
+        float capped = Mathf.Min(chosenDistance, GraphicsPresetController.MaxRenderDistance);
+        string distanceLabel = Mathf.Approximately(capped, chosenDistance)
+            ? chosenDistance + " m"
+            : chosenDistance + " m  (capped to " + capped + " m by preset)";
+        GUILayout.Button(distanceLabel, menuButtonStyle, GUILayout.ExpandWidth(true), GUILayout.Height(40f));
         if (GUILayout.Button("▶", menuButtonStyle, GUILayout.Width(70f), GUILayout.Height(40f)))
             SetRenderDistanceIndex(renderDistanceIndex + 1);
         GUILayout.EndHorizontal();
@@ -514,191 +536,6 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         int count = RenderDistanceSettings.Distances.Length;
         renderDistanceIndex = ((index % count) + count) % count;
         RenderDistanceSettings.SetIndex(renderDistanceIndex);
-    }
-
-    private void SetLoadMode(LoadMode mode)
-    {
-        loadMode = mode;
-        PlayerPrefs.SetInt(LoadModePrefKey, (int)mode);
-        PlayerPrefs.Save();
-        // Re-apply the quality preset first so a previous mode's overrides are cleared, then
-        // ApplyLoadMode layers the new mode on top.
-        ApplyGraphicsPreset(graphicsPreset);
-    }
-
-    private string LoadModeButton(string caption, LoadMode mode)
-    {
-        return loadMode == mode ? "[ " + caption + " ]" : caption;
-    }
-
-    private static string LoadModeName(LoadMode mode)
-    {
-        switch (mode)
-        {
-            case LoadMode.Cpu: return "CPU  •  GPU work reduced, CPU drives the frame";
-            case LoadMode.Gpu: return "GPU  •  higher GPU quality, culling moved to the GPU";
-            case LoadMode.OnlyGpu: return "ONLY GPU  •  maximum GPU load, CPU kept minimal";
-            default: return "MIX  •  balanced CPU + GPU (default)";
-        }
-    }
-
-    private static string LoadModeHint(LoadMode mode)
-    {
-        switch (mode)
-        {
-            case LoadMode.Cpu:
-                return "Render scale, MSAA, shadows and post-processing are lowered so the GPU has almost nothing to do and the CPU becomes the bottleneck.";
-            case LoadMode.Gpu:
-                return "Render scale, MSAA, shadow range and lighting are pushed up; GPU occlusion culling and vsync-off move work from the CPU to the GPU.";
-            case LoadMode.OnlyGpu:
-                return "Maximum GPU preset (150% render scale, 4x MSAA, 4K shadows, GPU culling) with CPU extras trimmed. Heavy — expect high GPU usage.";
-            default:
-                return "Uses exactly the quality preset above. Nothing is shifted; this is the normal balance.";
-        }
-    }
-
-    private void ApplyLoadMode()
-    {
-        if (loadMode == LoadMode.Mix)
-        {
-            // Balanced mode keeps the authored look, including SSAO.
-            SetAmbientOcclusion(true);
-            return;
-        }
-
-        UniversalRenderPipelineAsset pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
-        Camera playerCamera = playerController != null ? playerController.GetComponentInChildren<Camera>() : null;
-        UniversalAdditionalCameraData cameraData = playerCamera != null
-            ? playerCamera.GetComponent<UniversalAdditionalCameraData>()
-            : null;
-
-        if (loadMode == LoadMode.Cpu)
-        {
-            // Make the GPU cheap so the CPU is the limiting side of the frame.
-            SetAmbientOcclusion(false);
-            ScalableBufferManager.ResizeBuffers(0.85f, 0.85f);
-            QualitySettings.vSyncCount = 1;
-            QualitySettings.antiAliasing = 0;
-            QualitySettings.shadows = UnityEngine.ShadowQuality.HardOnly;
-            QualitySettings.shadowDistance = 25f;
-            QualitySettings.shadowCascades = 1;
-            QualitySettings.lodBias = 0.8f;
-            QualitySettings.maximumLODLevel = 0;
-            QualitySettings.particleRaycastBudget = 4096;
-            if (pipeline != null)
-            {
-                pipeline.renderScale = 0.8f;
-                pipeline.msaaSampleCount = 1;
-                pipeline.supportsHDR = false;
-                pipeline.supportsCameraDepthTexture = false;
-                pipeline.supportsCameraOpaqueTexture = false;
-                pipeline.shadowDistance = 25f;
-                pipeline.shadowCascadeCount = 1;
-                pipeline.mainLightShadowmapResolution = 1024;
-                pipeline.additionalLightsShadowmapResolution = 1024;
-                pipeline.maxAdditionalLightsCount = 4;
-                pipeline.gpuResidentDrawerEnableOcclusionCullingInCameras = false;
-            }
-
-            if (highQualityVolume != null)
-            {
-                highQualityVolume.enabled = false;
-            }
-
-            if (playerCamera != null)
-            {
-                playerCamera.allowHDR = false;
-                playerCamera.allowMSAA = false;
-            }
-
-            if (cameraData != null)
-            {
-                cameraData.renderPostProcessing = false;
-                cameraData.antialiasing = AntialiasingMode.None;
-                cameraData.renderShadows = true;
-            }
-
-            return;
-        }
-
-        // GPU / Only GPU: push the expensive work onto the GPU and trim CPU-side extras.
-        bool onlyGpu = loadMode == LoadMode.OnlyGpu;
-        float renderScale = onlyGpu ? 1.5f : 1.25f;
-        SetAmbientOcclusion(true);
-        ScalableBufferManager.ResizeBuffers(1f, 1f);
-        QualitySettings.vSyncCount = 0;
-        QualitySettings.antiAliasing = 4;
-        QualitySettings.shadows = UnityEngine.ShadowQuality.All;
-        QualitySettings.shadowDistance = onlyGpu ? 120f : 80f;
-        QualitySettings.shadowCascades = onlyGpu ? 4 : 2;
-        QualitySettings.shadowResolution = UnityEngine.ShadowResolution.VeryHigh;
-        QualitySettings.lodBias = onlyGpu ? 2f : 1.4f;
-        QualitySettings.maximumLODLevel = 0;
-        QualitySettings.particleRaycastBudget = onlyGpu ? 32 : 128;
-        QualitySettings.asyncUploadTimeSlice = onlyGpu ? 8 : 4;
-        QualitySettings.asyncUploadBufferSize = onlyGpu ? 128 : 64;
-        if (pipeline != null)
-        {
-            pipeline.renderScale = renderScale;
-            pipeline.msaaSampleCount = 4;
-            pipeline.supportsHDR = true;
-            pipeline.supportsCameraDepthTexture = true;
-            pipeline.supportsCameraOpaqueTexture = false;
-            pipeline.shadowDistance = onlyGpu ? 120f : 80f;
-            pipeline.shadowCascadeCount = onlyGpu ? 4 : 2;
-            pipeline.mainLightShadowmapResolution = onlyGpu ? 4096 : 2048;
-            pipeline.additionalLightsShadowmapResolution = onlyGpu ? 2048 : 1024;
-            pipeline.maxAdditionalLightsCount = 8;
-            // Occlusion culling is computed on the GPU instead of the CPU.
-            pipeline.gpuResidentDrawerEnableOcclusionCullingInCameras = true;
-        }
-
-        if (highQualityVolume != null)
-        {
-            highQualityVolume.enabled = true;
-        }
-
-        if (playerCamera != null)
-        {
-            playerCamera.allowHDR = true;
-            playerCamera.allowMSAA = true;
-        }
-
-        if (cameraData != null)
-        {
-            cameraData.renderPostProcessing = true;
-            cameraData.antialiasing = AntialiasingMode.SubpixelMorphologicalAntiAliasing;
-            cameraData.antialiasingQuality = AntialiasingQuality.High;
-            cameraData.renderShadows = true;
-        }
-    }
-
-    // SSAO is a renderer feature, not a post-processing volume effect, so the quality presets do
-    // not touch it. The load modes switch it because it is one of the most expensive full-screen
-    // passes: off makes the GPU cheap, on makes the GPU do more.
-    private static void SetAmbientOcclusion(bool active)
-    {
-        UniversalRenderPipelineAsset pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
-        if (pipeline == null)
-        {
-            return;
-        }
-
-        foreach (ScriptableRendererData rendererData in pipeline.rendererDataList)
-        {
-            if (rendererData == null || rendererData.rendererFeatures == null)
-            {
-                continue;
-            }
-
-            foreach (ScriptableRendererFeature feature in rendererData.rendererFeatures)
-            {
-                if (feature is ScreenSpaceAmbientOcclusion)
-                {
-                    feature.SetActive(active);
-                }
-            }
-        }
     }
 
     private void DrawAudioPage()
@@ -726,148 +563,10 @@ public sealed class PauseSettingsMenu : MonoBehaviour
         return updatedValue;
     }
 
-private void ApplyGraphicsPreset(GraphicsPreset preset)
+    private void ApplyGraphicsPreset(GraphicsPreset preset)
     {
         graphicsPreset = preset;
-        bool potato = preset == GraphicsPreset.Potato;
-        bool low = preset == GraphicsPreset.Low;
-        bool medium = preset == GraphicsPreset.Medium;
-        bool high = preset == GraphicsPreset.High;
-        bool max = preset == GraphicsPreset.Max;
-        bool postProcessing = !potato && !low;
-
-        QualitySettings.SetQualityLevel(potato || low ? 0 : 1, true);
-        QualitySettings.vSyncCount = potato || low ? 0 : 1;
-        QualitySettings.antiAliasing = max ? 4 : potato || low ? 0 : 2;
-        QualitySettings.shadows = potato ? UnityEngine.ShadowQuality.Disable : low ? UnityEngine.ShadowQuality.HardOnly : UnityEngine.ShadowQuality.All;
-        QualitySettings.shadowResolution = max || high ? UnityEngine.ShadowResolution.VeryHigh : medium ? UnityEngine.ShadowResolution.High : UnityEngine.ShadowResolution.Low;
-        QualitySettings.shadowDistance = potato ? 0f : low ? 25f : medium ? 45f : high ? 60f : 120f;
-        QualitySettings.shadowCascades = max ? 4 : high ? 2 : 1;
-        QualitySettings.shadowProjection = max ? UnityEngine.ShadowProjection.CloseFit : UnityEngine.ShadowProjection.StableFit;
-        QualitySettings.shadowNearPlaneOffset = max ? 1f : 3f;
-        QualitySettings.lodBias = potato ? 0.5f : low ? 0.8f : medium ? 1.1f : high ? 1f : 2f;
-        QualitySettings.maximumLODLevel = potato ? 1 : 0;
-        QualitySettings.anisotropicFiltering = potato ? AnisotropicFiltering.Disable : AnisotropicFiltering.Enable;
-        QualitySettings.realtimeReflectionProbes = postProcessing;
-        QualitySettings.billboardsFaceCameraPosition = max;
-        QualitySettings.softParticles = !potato && !low;
-        QualitySettings.particleRaycastBudget = max ? 4096 : potato ? 64 : low ? 256 : medium ? 1024 : 2048;
-        QualitySettings.asyncUploadTimeSlice = max ? 4 : 2;
-        QualitySettings.asyncUploadBufferSize = max ? 64 : 16;
-        QualitySettings.asyncUploadPersistentBuffer = max;
-        QualitySettings.skinWeights = SkinWeights.FourBones;
-        QualitySettings.streamingMipmapsActive = max || high;
-        QualitySettings.streamingMipmapsMemoryBudget = max ? 1024f : 512f;
-        QualitySettings.streamingMipmapsMaxLevelReduction = 1;
-        RenderSettings.ambientIntensity = max ? 1.18f : 1.05f;
-        ScalableBufferManager.ResizeBuffers(potato ? 0.65f : low ? 0.8f : medium ? 0.9f : 1f, potato ? 0.65f : low ? 0.8f : medium ? 0.9f : 1f);
-
-        UniversalRenderPipelineAsset pipeline = GraphicsSettings.currentRenderPipeline as UniversalRenderPipelineAsset;
-        if (pipeline != null)
-        {
-            pipeline.renderScale = max ? 1.5f : potato ? 0.75f : low ? 0.85f : medium ? 0.9f : 1f;
-            pipeline.msaaSampleCount = max ? 4 : potato || low ? 1 : 2;
-            pipeline.shadowDistance = potato ? 0f : low ? 25f : medium ? 45f : high ? 60f : 120f;
-            pipeline.shadowCascadeCount = max ? 4 : high ? 2 : 1;
-            pipeline.supportsHDR = postProcessing;
-            pipeline.maxAdditionalLightsCount = max ? 8 : 4;
-            pipeline.supportsCameraDepthTexture = postProcessing;
-            // Nothing in the project samples _CameraOpaqueTexture, so the full-screen color copy is pure cost.
-            pipeline.supportsCameraOpaqueTexture = false;
-
-            // AAA-only: crank the actual shadowmap resolution to 4K.
-            if (max)
-            {
-                pipeline.mainLightShadowmapResolution = 4096;
-                pipeline.additionalLightsShadowmapResolution = 2048;
-            }
-            else if (high)
-            {
-                pipeline.mainLightShadowmapResolution = 2048;
-                pipeline.additionalLightsShadowmapResolution = 1024;
-            }
-            else
-            {
-                pipeline.mainLightShadowmapResolution = 1024;
-                pipeline.additionalLightsShadowmapResolution = 1024;
-            }
-        }
-
-        if (highQualityVolume != null)
-        {
-            highQualityVolume.enabled = postProcessing;
-            VolumeProfile profile = highQualityVolume.sharedProfile;
-            if (profile != null)
-            {
-                if (profile.TryGet(out ColorAdjustments colorAdjustments))
-                {
-                    colorAdjustments.postExposure.value = max ? 0.18f : 0.1f;
-                    colorAdjustments.contrast.value = max ? 18f : 12f;
-                    colorAdjustments.saturation.value = max ? 14f : 8f;
-                    colorAdjustments.colorFilter.value = max
-                        ? new Color(1f, 0.9f, 0.78f, 1f)
-                        : new Color(1f, 0.98f, 0.95f, 1f);
-                }
-
-                if (profile.TryGet(out Bloom bloom))
-                {
-                    bloom.intensity.value = max ? 0.5f : 0.25f;
-                    bloom.threshold.value = max ? 0.9f : 1.1f;
-                    bloom.scatter.value = max ? 0.75f : 0.65f;
-                    bloom.highQualityFiltering.value = max;
-                }
-
-                if (profile.TryGet(out FilmGrain filmGrain))
-                {
-                    filmGrain.active = max;
-                    filmGrain.intensity.value = 0.06f;
-                    filmGrain.response.value = 0.8f;
-                }
-
-                if (profile.TryGet(out ChromaticAberration chromaticAberration))
-                {
-                    chromaticAberration.active = max;
-                    chromaticAberration.intensity.value = 0.02f;
-                }
-
-                if (profile.TryGet(out Vignette vignette))
-                {
-                    vignette.active = max;
-                    vignette.intensity.value = max ? 0.24f : 0.18f;
-                    vignette.smoothness.value = 0.5f;
-                }
-
-                // Neutral ACES-style tonemapping reads as "real camera" footage (AAA).
-                if (profile.TryGet(out Tonemapping tonemapping))
-                {
-                    tonemapping.active = postProcessing;
-                    tonemapping.mode.value = max ? TonemappingMode.ACES : TonemappingMode.Neutral;
-                }
-            }
-        }
-
-        Camera playerCamera = playerController != null ? playerController.GetComponentInChildren<Camera>() : null;
-        if (playerCamera != null)
-        {
-            playerCamera.allowHDR = postProcessing;
-            playerCamera.allowMSAA = postProcessing;
-            UniversalAdditionalCameraData cameraData = playerCamera.GetComponent<UniversalAdditionalCameraData>();
-            if (cameraData != null)
-            {
-                cameraData.renderPostProcessing = postProcessing;
-                cameraData.antialiasing = max
-                    ? AntialiasingMode.SubpixelMorphologicalAntiAliasing
-                    : postProcessing ? AntialiasingMode.FastApproximateAntialiasing : AntialiasingMode.None;
-                cameraData.antialiasingQuality = max
-                    ? AntialiasingQuality.High
-                    : AntialiasingQuality.Medium;
-                cameraData.renderShadows = !potato;
-                cameraData.dithering = max;
-            }
-        }
-
-        // The load mode is applied on top of the preset, so "Mix" leaves the preset untouched.
-        ApplyLoadMode();
+        GraphicsPresetController.Apply(preset);
     }
 
     private void SetGraphicsPreset(int value)
@@ -915,16 +614,9 @@ private void ApplyGraphicsPreset(GraphicsPreset preset)
         return resolution.width + " × " + resolution.height;
     }
 
-private static string PresetName(GraphicsPreset preset)
+    private static string PresetName(GraphicsPreset preset)
     {
-        switch (preset)
-        {
-            case GraphicsPreset.Potato: return "Potato  •  effects off / minimal detail";
-            case GraphicsPreset.Low: return "Low  •  lightweight shadows";
-            case GraphicsPreset.Medium: return "Medium  •  balanced detail";
-            case GraphicsPreset.High: return "High  •  full lighting / post-processing";
-            default: return "MAX  •  ultra shadows / 125% render / cinematic grade";
-        }
+        return GraphicsPresetController.DisplayName(preset);
     }
 
 private void EnsureStyles()
@@ -937,7 +629,6 @@ private void EnsureStyles()
     navSelectedTexture = CreateUiTexture(new Color(0.105f, 0.13f, 0.18f, 1f));
     buttonTexture = CreateUiTexture(new Color(0.075f, 0.095f, 0.13f, 1f));
     buttonHoverTexture = CreateUiTexture(new Color(0.16f, 0.21f, 0.29f, 1f));
-    fireIconTexture = CreateFireIcon();
         titleStyle = new GUIStyle(GUI.skin.label)
         {
             alignment = TextAnchor.MiddleLeft,
@@ -1051,48 +742,6 @@ private void EnsureStyles()
             wrapMode = TextureWrapMode.Clamp
         };
         texture.SetPixel(0, 0, color);
-        texture.Apply();
-        return texture;
-    }
-
-    // The IMGUI font has no emoji glyph, so the "Only GPU" flame is painted into a tiny texture
-    // instead of pasting a character that would render as a missing-glyph box.
-    private static Texture2D CreateFireIcon()
-    {
-        const int size = 24;
-        var texture = new Texture2D(size, size, TextureFormat.RGBA32, false)
-        {
-            hideFlags = HideFlags.HideAndDontSave,
-            filterMode = FilterMode.Bilinear,
-            wrapMode = TextureWrapMode.Clamp
-        };
-
-        var pixels = new Color[size * size];
-        var outer = new Color(1f, 0.32f, 0.04f, 1f);
-        var inner = new Color(1f, 0.86f, 0.22f, 1f);
-        var core = new Color(1f, 0.97f, 0.72f, 1f);
-        for (int y = 0; y < size; y++)
-        {
-            float t = y / (float)(size - 1);
-            float center = size * 0.5f + Mathf.Sin(t * Mathf.PI * 1.7f) * size * 0.15f * (1f - t);
-            float halfWidth = size * 0.40f * Mathf.Pow(1f - t, 0.6f) * Mathf.SmoothStep(0f, 1f, t * 5f);
-            for (int x = 0; x < size; x++)
-            {
-                float distance = Mathf.Abs(x + 0.5f - center) / Mathf.Max(0.001f, halfWidth);
-                if (distance >= 1f)
-                {
-                    pixels[y * size + x] = Color.clear;
-                    continue;
-                }
-
-                Color color = Color.Lerp(outer, inner, Mathf.Clamp01(1f - t));
-                color = Color.Lerp(color, core, Mathf.Clamp01(1f - distance * 2.4f));
-                color.a = Mathf.Clamp01((1f - distance) * 4f);
-                pixels[y * size + x] = color;
-            }
-        }
-
-        texture.SetPixels(pixels);
         texture.Apply();
         return texture;
     }

@@ -166,7 +166,7 @@ MonoBehaviour:
   nightSkyboxMaterial: {fileID: 2100000, guid: 6eecb3bb77b3f7a43a504fceda3b0b5f, type: 2}
   sunsetSkyboxMaterial: {fileID: 2100000, guid: de1d750fefeeac642bf9b11a3978ccf5, type: 2}
   chainsawClip: {fileID: 0}
-  fredLinkImage5: {fileID: 2800000, guid: 454cd7c370aa1b14b84dbc8f888cb095, type: 3}
+  fredLinkImage: {fileID: 2800000, guid: 9b7e4c1d2f8a4e63a5c0d9b27e3f8164, type: 3}
   auntElaMarkerScreenSize: 90
   auntElaHousePosition: {x: 0, y: 0, z: 0}
   jungleChaseCatchReset: 0.4

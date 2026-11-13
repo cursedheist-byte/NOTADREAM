@@ -242,7 +242,7 @@ public sealed class Scene2EveningManager : MonoBehaviour
     private AudioClip heartbeatClip;
     private AudioClip killSfxClip;
     [SerializeField] private AudioClip chainsawClip;
-    [SerializeField] private Texture2D fredLinkImage5;
+    [SerializeField] private Texture2D fredLinkImage;
 
     private GameObject fredActor;
     private GameObject momActor;
@@ -388,6 +388,9 @@ public sealed class Scene2EveningManager : MonoBehaviour
     private bool auntElaRushActive;
     private float auntElaRushTimer;
     private GameObject auntElaMonster;
+    private float auntElaMonsterCenterOffsetY;
+    private bool auntElaRushFadeStarted;
+    private bool auntElaEngulfBlackout;
     [SerializeField] private float auntElaSpotDistance = 10f;
     private bool finalEscapeActive;
     private float finalEscapeRemaining;
@@ -813,8 +816,12 @@ public sealed class Scene2EveningManager : MonoBehaviour
         out Transform modelRoot)
     {
         modelRoot = null;
-#if UNITY_EDITOR
-        var modelAsset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+        var modelAsset = BuildAssetLoader.Load<GameObject>(assetPath);
+        if (modelAsset == null)
+        {
+            Debug.LogWarning("Scene2EveningManager could not load '" + assetPath + "' for " + name + "; using the placeholder.", this);
+        }
+
         if (modelAsset != null)
         {
             var actor = new GameObject(name);
@@ -831,7 +838,7 @@ public sealed class Scene2EveningManager : MonoBehaviour
             {
                 var meshFilter = model.GetComponentInChildren<MeshFilter>();
                 var characterRenderer = meshFilter != null ? meshFilter.GetComponent<Renderer>() : null;
-                var vertexColorMaterial = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
+                var vertexColorMaterial = BuildAssetLoader.Load<Material>(
                     "Assets/Characters/LIL_BROTHER/LittleBrotherVertexColors.mat");
                 littleBrotherVertexColors = meshFilter != null
                     ? LoadObjVertexColors(assetPath, meshFilter.sharedMesh)
@@ -874,18 +881,19 @@ public sealed class Scene2EveningManager : MonoBehaviour
 
             Destroy(actor);
         }
-#endif
+
         return CreateHumanPlaceholder(name + "Placeholder", position, rotation, parent, fallbackColor);
     }
 
     private static Color[] LoadObjVertexColors(string assetPath, Mesh mesh)
     {
-#if UNITY_EDITOR
         if (mesh == null)
         {
             return null;
         }
 
+        string[] lines;
+#if UNITY_EDITOR
         var objPath = Path.Combine(
             Application.dataPath,
             assetPath.Substring("Assets/".Length).Replace('/', Path.DirectorySeparatorChar));
@@ -894,8 +902,21 @@ public sealed class Scene2EveningManager : MonoBehaviour
             return null;
         }
 
+        lines = File.ReadAllLines(objPath);
+#else
+        // The player cannot read the raw .obj beside the assets, so a text copy ships in
+        // Resources under the same folder and is parsed with the same rules.
+        var objText = Resources.Load<TextAsset>(
+            "BuildAssets/" + assetPath.Substring("Assets/".Length));
+        if (objText == null)
+        {
+            return null;
+        }
+
+        lines = objText.text.Split('\n');
+#endif
+
         var colorsByPosition = new Dictionary<Vector3, Color>();
-        var lines = File.ReadAllLines(objPath);
         for (int i = 0; i < lines.Length; i++)
         {
             if (!lines[i].StartsWith("v ", System.StringComparison.Ordinal))
@@ -932,9 +953,6 @@ public sealed class Scene2EveningManager : MonoBehaviour
         }
 
         return colors;
-#else
-        return null;
-#endif
     }
 
     private static Vector3 QuantizeVertexColorPosition(Vector3 position)
@@ -1744,10 +1762,10 @@ public sealed class Scene2EveningManager : MonoBehaviour
             ? Quaternion.LookRotation(facingPlayer.normalized, Vector3.up)
             : Quaternion.identity;
 
-#if UNITY_EDITOR
-        var asset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/FRED/fred.glb");
+        var asset = BuildAssetLoader.Load<GameObject>("Assets/Characters/FRED/fred.glb");
         if (asset == null)
         {
+            Debug.LogWarning("Scene2EveningManager could not load fred.glb; using the placeholder.", this);
             return CreateHumanPlaceholder("Fred", spawnPosition, spawnRotation, parent, new Color(0.75f, 0.67f, 0.56f));
         }
 
@@ -1756,9 +1774,6 @@ public sealed class Scene2EveningManager : MonoBehaviour
         instance.transform.localScale = Vector3.one * 1.08f;
         GroundActor(instance, groundY);
         return instance;
-#else
-        return CreateHumanPlaceholder("Fred", spawnPosition, spawnRotation, parent, new Color(0.75f, 0.67f, 0.56f));
-#endif
     }
 
     private float ResolveGroundHeight(Vector3 position)
@@ -2708,6 +2723,8 @@ public sealed class Scene2EveningManager : MonoBehaviour
             phase = ScenePhase.AuntElaRush;
             auntElaRushActive = true;
             auntElaRushTimer = 0f;
+            auntElaRushFadeStarted = false;
+            auntElaEngulfBlackout = false;
             currentObjective = string.Empty;
             currentPrompt = string.Empty;
             MessageBoxRushIn();
@@ -3544,7 +3561,6 @@ public sealed class Scene2EveningManager : MonoBehaviour
 
     private static Texture2D LoadLaptopStoryImage(int imageNumber)
     {
-#if UNITY_EDITOR
         string assetPath;
         switch (imageNumber)
         {
@@ -3570,15 +3586,12 @@ public sealed class Scene2EveningManager : MonoBehaviour
                 return null;
         }
 
-        return UnityEditor.AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-#else
-        return null;
-#endif
+        return BuildAssetLoader.Load<Texture2D>(assetPath);
     }
 
     private Texture2D LoadPhoneLinkImage()
     {
-        return fredLinkImage5 != null ? fredLinkImage5 : LoadLaptopStoryImage(5);
+        return fredLinkImage != null ? fredLinkImage : LoadLaptopStoryImage(5);
     }
 
     private void UpdateLaptopImagePlaceholder()
@@ -3963,10 +3976,10 @@ public sealed class Scene2EveningManager : MonoBehaviour
         var image = LoadPhoneLinkImage();
         if (image == null)
         {
-            Debug.LogError("Missing in-game phone image reference: Assets/StoryImages/image 5.png", this);
+            Debug.LogError("Missing in-game phone image reference: Assets/StoryImages/fred_darkweb.png", this);
         }
 
-        phoneMessages.OpenImageViewer(image, "Assets/StoryImages/image 5.png");
+        phoneMessages.OpenImageViewer(image, "Assets/StoryImages/fred_darkweb.png");
         StartConversation(new List<DialogueLine>
         {
             new DialogueLine("MC", "WTF is this?")
@@ -5203,8 +5216,12 @@ public sealed class Scene2EveningManager : MonoBehaviour
             ? Quaternion.LookRotation(facing.normalized, Vector3.up)
             : Quaternion.identity;
 
-#if UNITY_EDITOR
-        var model = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+        var model = BuildAssetLoader.Load<GameObject>(assetPath);
+        if (model == null)
+        {
+            Debug.LogWarning("Scene2EveningManager could not load creature model '" + assetPath + "'.", this);
+        }
+
         if (model != null)
         {
             // Keep the asset's imported root rotation beneath a separate world-facing pivot.
@@ -5244,7 +5261,6 @@ public sealed class Scene2EveningManager : MonoBehaviour
             offsetHolder.feetOffset = feetOffset;
             return instance;
         }
-#endif
 
         var placeholder = SpawnMonsterPlaceholder(name, position, rotation);
         placeholder.transform.position = new Vector3(position.x, position.y, position.z);
@@ -5278,18 +5294,16 @@ public sealed class Scene2EveningManager : MonoBehaviour
         }
 
         AnimationClip clip = null;
-#if UNITY_EDITOR
-        var assets = UnityEditor.AssetDatabase.LoadAllAssetsAtPath(assetPath);
-        for (int i = 0; i < assets.Length; i++)
+        var clips = BuildAssetLoader.LoadAll<AnimationClip>(assetPath);
+        for (int i = 0; i < clips.Length; i++)
         {
-            if (assets[i] is AnimationClip candidate && candidate.length > 0.05f &&
-                !candidate.name.StartsWith("__preview__", System.StringComparison.Ordinal))
+            if (clips[i].length > 0.05f &&
+                !clips[i].name.StartsWith("__preview__", System.StringComparison.Ordinal))
             {
-                clip = candidate;
+                clip = clips[i];
                 break;
             }
         }
-#endif
         if (clip == null)
         {
             Debug.LogWarning("Creature model has no animation clip: " + assetPath, this);
@@ -5831,8 +5845,12 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
             ? Quaternion.LookRotation(facingPlayer.normalized, Vector3.up)
             : Quaternion.identity;
 
-#if UNITY_EDITOR
-        var asset = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Characters/FRED/fred.glb");
+        var asset = BuildAssetLoader.Load<GameObject>("Assets/Characters/FRED/fred.glb");
+        if (asset == null)
+        {
+            Debug.LogWarning("Scene2EveningManager could not load fred.glb for the scare.", this);
+        }
+
         if (asset != null)
         {
             scareFredActor = Instantiate(asset, spawnPosition, rotation, transform);
@@ -5841,7 +5859,7 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
             GroundActor(scareFredActor, spawnPosition.y);
             return;
         }
-#endif
+
         scareFredActor = CreateHumanPlaceholder("ScareFred", spawnPosition, rotation, transform, new Color(0.75f, 0.67f, 0.56f));
     }
 
@@ -5901,10 +5919,29 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
             "Assets/Characters/MONSTER 2/the_backrooms-entity_3_smiler.glb",
             spawnPoint,
             player.transform.position);
+
+        // Remember where the creature's body centre sits relative to its transform origin so
+        // the lunge can line its torso up with the camera instead of towering over the player.
+        auntElaMonsterCenterOffsetY = 0f;
+        if (auntElaMonster != null)
+        {
+            var renderers = auntElaMonster.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length > 0)
+            {
+                var bounds = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+
+                auntElaMonsterCenterOffsetY = auntElaMonster.transform.position.y - bounds.center.y;
+            }
+        }
     }
 
-    // The monster rushes from ~10 m away straight to right in front of the player in about a
-    // second, then the screen cuts to black and the dream-wake sequence begins.
+    // The monster rushes from ~10 m away and keeps coming until its torso is pressed right up
+    // against the lens, so it reads as swallowing the player instead of standing over them.
+    // The screen fades to black just before contact and the dream-wake sequence begins.
     private void UpdateAuntElaRush()
     {
         if (auntElaMonster == null || playerCamera == null)
@@ -5917,14 +5954,29 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
         float progress = Mathf.Clamp01(auntElaRushTimer / rushDuration);
 
         var start = auntElaMonster.transform.position;
-        var target = playerCamera.transform.position + playerCamera.transform.forward * 0.5f;
+        var cameraTransform = playerCamera.transform;
+        var target = cameraTransform.position + cameraTransform.forward * 0.45f;
+        // Line the creature's centre of mass up with eye level so its body covers the view
+        // instead of towering above the camera with the head out of frame.
+        target.y = cameraTransform.position.y + auntElaMonsterCenterOffsetY;
         auntElaMonster.transform.position = Vector3.Lerp(start, target, progress);
 
         // Face the player during the lunge.
-        auntElaMonster.transform.rotation = Quaternion.LookRotation(
-            (playerCamera.transform.position - new Vector3(auntElaMonster.transform.position.x, 0f,
-                 auntElaMonster.transform.position.z)).normalized,
-            Vector3.up);
+        var toCamera = cameraTransform.position - auntElaMonster.transform.position;
+        toCamera.y = 0f;
+        if (toCamera.sqrMagnitude > 0.0001f)
+        {
+            auntElaMonster.transform.rotation = Quaternion.LookRotation(toCamera.normalized, Vector3.up);
+        }
+
+        // Cut to black while the creature is still closing in, so the fade completes right as
+        // it reaches the camera and the player never sees the lunge snap back.
+        if (!auntElaRushFadeStarted && progress >= 0.9f)
+        {
+            auntElaRushFadeStarted = true;
+            auntElaEngulfBlackout = true;
+            StartCoroutine(FadeToBlackForEngulf());
+        }
 
         if (progress >= 1f)
         {
@@ -5933,13 +5985,39 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
         }
     }
 
+    private IEnumerator FadeToBlackForEngulf()
+    {
+        if (timeTransitionPanel == null)
+        {
+            yield break;
+        }
+
+        timeTransitionPanel.SetActive(true);
+        var text = timeTransitionPanel.GetComponentInChildren<TextMeshProUGUI>(true);
+        if (text != null)
+        {
+            text.text = string.Empty;
+        }
+
+        if (timeTransitionCanvasGroup != null)
+        {
+            yield return FadeCanvasGroup(timeTransitionCanvasGroup, 1f, 0.1f);
+        }
+    }
+
     private void MessageBoxRushIn()
     {
         // Called the moment the "WTF" line finishes. The monster is right in front of the player,
-        // so make sure the camera is on it while the lunge plays out.
+        // so make sure the camera is on it while the lunge plays out. Aim at eye level to keep
+        // the view level as it closes in.
         if (auntElaMonster != null)
         {
             cameraAimPoint = auntElaMonster.transform.position + Vector3.up * 1.2f;
+            if (playerCamera != null)
+            {
+                cameraAimPoint.y = playerCamera.transform.position.y;
+            }
+
             hasCameraAimPoint = true;
         }
     }
@@ -6289,13 +6367,11 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
         // Use the matching moonlit panorama from the same Fantasy Skybox pack as dusk.
         // Clone at runtime to leave the shared pack material unchanged.
         var nightSky = nightSkyboxMaterial;
-#if UNITY_EDITOR
         if (nightSky == null)
         {
-            nightSky = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
+            nightSky = BuildAssetLoader.Load<Material>(
                 "Assets/Fantasy Skybox FREE/Panoramics/FS013/FS013_Night.mat");
         }
-#endif
         if (nightSky != null)
         {
             if (sceneSkyboxMaterial != null && sceneSkyboxMaterial != nightSky)
@@ -6339,13 +6415,11 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
         // Use the project's authored panoramic sunset from the Fantasy Skybox pack.
         // Clone it at runtime so the shared pack asset remains untouched.
         var sunsetSky = sunsetSkyboxMaterial;
-#if UNITY_EDITOR
         if (sunsetSky == null)
         {
-            sunsetSky = UnityEditor.AssetDatabase.LoadAssetAtPath<Material>(
+            sunsetSky = BuildAssetLoader.Load<Material>(
                 "Assets/Fantasy Skybox FREE/Panoramics/FS013/FS013_Sunset.mat");
         }
-#endif
         if (sunsetSky != null)
         {
             if (sceneSkyboxMaterial != null && sceneSkyboxMaterial != sunsetSky)
@@ -7016,11 +7090,13 @@ private IEnumerator ReleaseScene2BlackAfterRepeatLoad()
 
     private AudioClip LoadAudioClip(string assetPath)
     {
-#if UNITY_EDITOR
-        return UnityEditor.AssetDatabase.LoadAssetAtPath<AudioClip>(assetPath);
-#else
-        return null;
-#endif
+        var clip = BuildAssetLoader.Load<AudioClip>(assetPath);
+        if (clip == null)
+        {
+            Debug.LogWarning("Scene2EveningManager could not load audio '" + assetPath + "'.", this);
+        }
+
+        return clip;
     }
 
     public void DebugPrepareForLiminalEndingTest()
@@ -7375,8 +7451,17 @@ private void SetDebugPlayerPosition(Vector3 position)
 
             if (timeTransitionCanvasGroup != null)
             {
-                timeTransitionCanvasGroup.alpha = 0f;
-                yield return FadeCanvasGroup(timeTransitionCanvasGroup, 1f, 0.4f);
+                // The engulf lunge already faded the screen out; never flash the world back
+                // into view for the fade-in here.
+                if (!auntElaEngulfBlackout && timeTransitionCanvasGroup.alpha < 0.99f)
+                {
+                    timeTransitionCanvasGroup.alpha = 0f;
+                    yield return FadeCanvasGroup(timeTransitionCanvasGroup, 1f, 0.4f);
+                }
+                else
+                {
+                    timeTransitionCanvasGroup.alpha = 1f;
+                }
             }
         }
         else
@@ -7813,7 +7898,6 @@ private void SetDebugPlayerPosition(Vector3 position)
     // Loads the "office setup/Office Work Space" OBJ parts and assembles them into one setup.
     private GameObject SpawnOfficeWorkspaceModel(Vector3 position, Vector3 lookAtPosition)
     {
-#if UNITY_EDITOR
         const string folder = "Assets/office setup/Office Work Space";
         var parts = new GameObject("HallwayOfficeSetup");
         parts.transform.position = position;
@@ -7831,9 +7915,10 @@ private void SetDebugPlayerPosition(Vector3 position)
         for (int i = 0; i < 7; i++)
         {
             var assetPath = folder + "/model_" + i + ".obj";
-            var model = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            var model = BuildAssetLoader.Load<GameObject>(assetPath);
             if (model == null)
             {
+                Debug.LogWarning("Scene2EveningManager could not load office part '" + assetPath + "'.", this);
                 continue;
             }
 
@@ -7907,9 +7992,6 @@ private void SetDebugPlayerPosition(Vector3 position)
             combinedBounds.center.z - position.z);
         parts.transform.position -= horizontalCenter;
         return parts;
-#else
-        return null;
-#endif
     }
 
     private void BuildBackroomsHallway(Transform parent)
