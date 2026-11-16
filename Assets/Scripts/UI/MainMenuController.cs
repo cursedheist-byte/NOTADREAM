@@ -101,12 +101,37 @@ public sealed class MainMenuController : MonoBehaviour
         menuGroup = menuObject.GetComponent<CanvasGroup>();
 
         CreateImage("Title Accent", menuObject.transform,
-            AnchoredRect(new Vector2(0.075f, 0.725f), new Vector2(0.075f, 0.725f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(4f, 68f)),
+            AnchoredRect(new Vector2(0.075f, 0.725f), new Vector2(0.075f, 0.725f), new Vector2(0f, 0.5f), Vector2.zero, new Vector2(4f, 150f)),
             new Color(1f, 0.30f, 0.16f, 1f));
-        var title = CreateText("Game Title", menuObject.transform, "NOT A DREAM",
-            new Vector2(0.095f, 0.725f), new Vector2(0f, 0.5f), new Vector2(820f, 92f),
-            72f, Color.white, FontStyles.Bold, TextAlignmentOptions.Left);
-        title.characterSpacing = 3f;
+
+        // The title is the box-art wordmark built from the menu photograph; the TMP text
+        // below is only a fallback for a build that lost the Resource.
+        var logoTexture = Resources.Load<Texture2D>("UI/NotADream_Logo");
+        if (logoTexture != null)
+        {
+            // Explicit sizeDelta here: CreateImage zeroes the offsets after setting the size,
+            // which collapses a fixed-size image to nothing.
+            var logoObject = new GameObject("Game Logo", typeof(RectTransform), typeof(Image));
+            logoObject.transform.SetParent(menuObject.transform, false);
+            var logoRect = logoObject.GetComponent<RectTransform>();
+            logoRect.anchorMin = new Vector2(0.095f, 0.725f);
+            logoRect.anchorMax = logoRect.anchorMin;
+            logoRect.pivot = new Vector2(0f, 0.5f);
+            logoRect.anchoredPosition = Vector2.zero;
+            logoRect.sizeDelta = new Vector2(645f, 225f);
+            var logo = logoObject.GetComponent<Image>();
+            logo.sprite = Sprite.Create(logoTexture, new Rect(0f, 0f, logoTexture.width, logoTexture.height), new Vector2(0.5f, 0.5f));
+            logo.type = Image.Type.Simple;
+            logo.preserveAspect = true;
+            logo.raycastTarget = false;
+        }
+        else
+        {
+            var title = CreateText("Game Title", menuObject.transform, "NOT A DREAM",
+                new Vector2(0.095f, 0.725f), new Vector2(0f, 0.5f), new Vector2(820f, 92f),
+                72f, Color.white, FontStyles.Bold, TextAlignmentOptions.Left);
+            title.characterSpacing = 3f;
+        }
 
         CreateMenuButton(menuObject.transform, "PLAY", new Vector2(0.095f, 0.535f), OnPlayPressed);
         CreateMenuButton(menuObject.transform, "SETTINGS", new Vector2(0.095f, 0.445f), OnSettingsPressed);

@@ -10,7 +10,7 @@ using UnityEngine.Rendering.Universal;
 using UnityEngine.SceneManagement;
 
 // Diagnostic-only logger, activated from the command line:
-//   NyxoGame.exe -nyxoProbe [-nyxoScene world|scene2|scene1] [-nyxoSweep 25]
+//   NOT A DREAM.exe -nyxoProbe [-nyxoScene world|scene2|scene1] [-nyxoSweep 25]
 //                [-nyxoNoVeg] [-nyxoNoLights] [-nyxoNoShadows]
 //                [-nyxoNoProps] [-nyxoLiminal [-nyxoLiminalTimeout 180]] [-nyxoLeaveTest]
 // It writes one line per second with the real frame budget split (main thread, present wait,
@@ -211,6 +211,14 @@ public sealed class RuntimeProbe : MonoBehaviour
             + " mainMenuController=" + (controllers.Length > 0)
             + " timeScale=" + Time.timeScale
             + " cursor=" + Cursor.lockState + "/" + Cursor.visible);
+
+        // The desktop may be busy, so pull the frame straight from the player instead of
+        // relying on a screen grab of whatever window happens to be on top.
+        yield return new WaitForSecondsRealtime(1f);
+        string capturePath = Application.persistentDataPath + "/nyxo_menu_capture.png";
+        ScreenCapture.CaptureScreenshot(capturePath);
+        Debug.Log("[NyxoLeave] capture=" + capturePath);
+        yield return new WaitForSecondsRealtime(1.5f);
     }
 
     private static void LogRenderSetup()
